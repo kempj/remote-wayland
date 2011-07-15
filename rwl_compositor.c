@@ -9,8 +9,9 @@
 #include <sys/un.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <netdb.h>
 
-
+static char* remote_address;
 
 struct wl_socket {
 	int fd;
@@ -35,14 +36,43 @@ struct wl_display {
 	struct wl_list client_list;
 };
 
+int rwl_get_remote_connection(char remote_name[])
+{
+	int err, remote_fd;
+	struct addrinfo *remote, *result;
+
+	if((err = getaddrinfo(remote_name, "35000", NULL, &remote)) != 0) {
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(err));
+		return EXIT_FAILURE;
+	}
+
+	for(result = remote;result != NULL;result = result->ai_next){
+		if((remote_fd = socket(result->ai_family, result->ai_socktype,
+				result->ai_protocol)) == -1){
+			perror("client: socket");
+			continue;
+		}
+
+		if (connect(remote_fd, result->ai_addr, result->ai_addrlen) == -1) {
+			close(remote_fd);
+			perror("client: connect");
+			continue;
+        	}
+
+		break;
+	}	
+	return remote_fd;
+}
+
 static int
 rwl_forward_init(int fd, uint32_t mask, void *data)
 {
 	struct wl_display *display = data;
 	struct sockaddr_un name;
 	socklen_t length;
-	int client_fd;
+	int client_fd, remote_fd;
 
+	remote_fd = rwl_get_remote_connection("127.0.0.1");
 	length = sizeof name;
 	client_fd =
 		accept4(fd, (struct sockaddr *) &name, &length, SOCK_CLOEXEC);
@@ -55,7 +85,8 @@ rwl_forward_init(int fd, uint32_t mask, void *data)
 	if (client_fd < 0)
 		fprintf(stderr, "failed to accept, errno: %d\n", errno);
 
-
+	//wl_client_create(display,client_fd);
+	//add fd to epoll, create remote connection, add it to epoll
 	//wl_closure_print();
 	return 1;
 }
@@ -176,6 +207,13 @@ int
 main(int argc, char *argv[])
 {
 	struct wl_display *display = wl_display_create();
+	
+	if(argc > 1){
+		remote_address = argv[2];
+	} else{
+		remote_address = (char *) malloc(13 * sizeof (char));
+		*remote_address = (char) "127.0.0.1";
+	}
 	
 	if (wl_display_add_socket(display, NULL)) {
 		fprintf(stderr, "failed to add socket: %m\n");

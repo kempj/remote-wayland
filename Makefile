@@ -10,4 +10,4 @@ pserver: rwl_compositor.c
 	gcc rwl_compositor.c /home/jeremy/wayland/install/lib/libwayland-server.a  /usr/lib/x86_64-linux-gnu/libffi.a -lrt -o pserver 
 
 pclient: event-loop.o rwl_client.o
-	echo gcc -o pclient $^ /home/jeremy/wayland/install/lib/libwayland-client.a  /usr/lib/x86_64-linux-gnu/libffi.a  -o pclient -I. /home/jeremy/wayland/install/lib/libwayland-server.a /usr/lib/x86_64-linux-gnu/libffi.a /usr/lib/x86_64-linux-gnu/librt.a > clientbuild 
+	gcc -o pclient $^ /home/jeremy/wayland/install/lib/libwayland-client.a  /usr/lib/x86_64-linux-gnu/libffi.a  -o pclient -I. /home/jeremy/wayland/install/lib/libwayland-server.a /usr/lib/x86_64-linux-gnu/libffi.a /usr/lib/x86_64-linux-gnu/librt.a 

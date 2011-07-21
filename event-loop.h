@@ -1,5 +1,10 @@
 struct wl_display;
 
+enum {
+	WL_EVENT_READABLE = 0x01,
+	WL_EVENT_WRITEABLE = 0x02
+};
+
 typedef int (*wl_event_loop_fd_func_t)(int fd, uint32_t mask, void *data);
 
 //event loop functions

@@ -312,17 +312,17 @@ rwl_create_forward(int remote_fd, struct wl_server_display *main_display)
 	connection_out->fd_to = remote_fd;
 	connection_out->connection = malloc(sizeof connection_out->connection);
 
-	int local_fd = wl_display_get_fd(client_display,NULL,NULL);
 
 	wl_event_loop_add_fd(main_display->loop,
 		     remote_fd, WL_EVENT_READABLE,
 		     rwl_forward,
 		     connection_in);
 
-	wl_event_loop_add_fd(display->loop,
-		     fd, WL_EVENT_READABLE,
+	wl_event_loop_add_fd(main_display->loop,
+		     local_fd, WL_EVENT_READABLE,
 		     rwl_forward,
 		     connection_out);
+	return 1;
 }
 
 static int 
@@ -333,8 +333,9 @@ rwl_remote_connection(int fd, uint32_t mask, void *data)
 	socklen_t size;
 
 	int remote_fd = accept(display->fd,(struct sockaddr *) &incoming_addr, size);
-
 	rwl_create_forward(remote_fd, display->display);
+
+	//call rwl_forward
 
 	return 1;
 }
@@ -347,6 +348,8 @@ main(int argc, char **argv)
 	struct window *window;
 	int fd, err;
 	struct addrinfo *local_address_info;
+	printf("0\n");
+//	return 0;
 	
 	display = rwl_display_create();
 
@@ -354,23 +357,29 @@ main(int argc, char **argv)
 		fprintf(stderr, "pclient:getaddrinfo error: %s\n", gai_strerror(err));
 		return EXIT_FAILURE;
 	}
+		printf("1\n");
 	fd = socket(local_address_info->ai_family, 
 			local_address_info->ai_socktype,
 			local_address_info->ai_protocol);
 	bind(fd,local_address_info->ai_addr,local_address_info->ai_addrlen);
+		printf("2\n");
 	listen(fd,8);
+		printf("3\n");
 
 	remote_display = malloc(sizeof remote_display);
 	remote_display->display = display;
 	remote_display->fd = fd;
+
 
 	wl_event_loop_add_fd(display->loop,
 		     fd, WL_EVENT_READABLE,
 		     rwl_remote_connection,
 		     remote_display);
 
-	while (true)
+	while (true){
+		printf("mainloop");
 		rwl_display_run(display);
 
+	}
 	return 0;
 }

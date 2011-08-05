@@ -36,7 +36,40 @@ struct wl_display {
 	struct wl_list client_list;
 };
 
-int rwl_get_remote_connection(char *remote_name)
+struct wl_client {
+	struct wl_connection *connection;
+	struct wl_event_source *source;
+	struct wl_display *display;
+	struct wl_list resource_list;
+	uint32_t id_count;
+	uint32_t mask;
+	struct wl_list link;
+};
+
+struct rwl_client_pair {
+	struct wl_client *client_in;
+	struct wl_client *client_out;
+};
+
+static int
+wl_client_connection_update(struct wl_connection *connection,
+			    uint32_t mask, void *data)
+{
+	struct wl_client *client = data;
+	uint32_t emask = 0;
+
+	client->mask = mask;
+	if (mask & WL_CONNECTION_READABLE)
+		emask |= WL_EVENT_READABLE;
+	if (mask & WL_CONNECTION_WRITABLE)
+		emask |= WL_EVENT_WRITEABLE;
+
+	return wl_event_source_fd_update(client->source, emask);
+}
+
+
+int
+rwl_get_remote_connection(char *remote_name)
 {
 	int err, remote_fd;
 	struct addrinfo *remote, *result;
@@ -68,7 +101,163 @@ int rwl_get_remote_connection(char *remote_name)
 }
 
 static int
-rwl_forward_init(int fd, uint32_t mask, void *data)
+rwl_client_connection_data(int fd, uint32_t mask, void *data)
+{
+	struct rwl_client_pair *client_pair = data;
+	struct wl_client *client_in, *client_out;
+	client_in = client_pair->client_in;
+	client_out = client_pair->client_out;
+	
+	struct wl_connection *connection_in, *connection_out;
+	connection_in = client_in->connection;
+	connection_out = client_out->connection;
+
+	struct wl_object *object;
+	struct wl_closure *closure;
+	const struct wl_message *message;
+	uint32_t p[2], opcode, size;
+	uint32_t cmask = 0;
+	int len;
+
+	if (mask & WL_EVENT_READABLE)
+		cmask |= WL_CONNECTION_READABLE;
+	if (mask & WL_EVENT_WRITEABLE)
+		cmask |= WL_CONNECTION_WRITABLE;
+
+	len = wl_connection_data(connection_in, cmask);
+	if(len < 0) {
+		wl_client_destroy(client_in);
+		//wl_client_destroy(client_out);
+		return 1;
+	}
+	
+	while (len >= sizeof p) {
+		wl_connection_copy(connection_in, p, sizeof p);
+		opcode = p[1] & 0xffff;
+		size = p[1] >> 16;
+		if (len < size)
+			break;
+
+		object = wl_hash_table_lookup(client_in->display->objects, p[0]);
+		if (object == NULL) {
+			wl_client_post_error(client_in, &client_in->display->object,
+					     WL_DISPLAY_ERROR_INVALID_OBJECT,
+					     "invalid object %d", p[0]);
+			wl_connection_consume(connection_in, size);
+			len -= size;
+			continue;
+		}
+
+		if (opcode >= object->interface->method_count) {
+			wl_client_post_error(client_in,&client_in->display->object,
+                                             WL_DISPLAY_ERROR_INVALID_METHOD,
+                                             "invalid method %d, object %s@%d",
+                                             object->interface->name,
+                                             object->id, opcode);
+                        wl_connection_consume(connection_in, size);
+                        len -= size;
+                        continue;
+                }
+
+                message = &object->interface->methods[opcode];
+                closure = wl_connection_demarshal(client_in->connection, size,
+                                                  client_in->display->objects,
+                                                  message);
+                len -= size;
+
+                if (closure == NULL && errno == EINVAL) {
+                        wl_client_post_error(client_in, &client_in->display->object,
+                                             WL_DISPLAY_ERROR_INVALID_METHOD,
+                                             "invalid arguments for %s@%d.%s",
+                                             object->interface->name,
+                                             object->id, message->name);
+                        continue;
+                } else if (closure == NULL && errno == ENOMEM) {
+                        wl_client_post_no_memory(client_in);
+                        continue;
+                }
+
+		//do I need to vmarshal?
+		wl_closure_send(closure, client_out->connection);		
+
+		wl_closure_print(closure, object, 1);
+
+		wl_closure_destroy(closure);
+	} 
+
+	return 1;
+}
+
+static int
+rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
+{
+	struct wl_client *local_client;
+	struct wl_client *remote_client;
+	
+	struct rwl_client_pair *incoming_fwd;
+	struct rwl_client_pair *outgoing_fwd;
+	
+	incoming_fwd = malloc(sizeof *incoming_fwd);
+	if (incoming_fwd == NULL)
+		return NULL;
+	
+	outgoing_fwd = malloc(sizeof *outgoing_fwd);
+	if (outgoing_fwd == NULL)
+		return NULL;
+	
+	outgoing_fwd->client_in = local_client;
+	outgoing_fwd->client_out = remote_client;
+		
+	incoming_fwd->client_in = remote_client;
+	incoming_fwd->client_out = local_client;
+		
+	
+	local_client = malloc(sizeof *local_client);
+	if (local_client == NULL)
+		return NULL;
+	
+	memset(local_client, 0, sizeof *local_client);
+	local_client->display = display;
+	
+	local_client->source = wl_event_loop_add_fd(display->loop, fd_local,
+					      WL_EVENT_READABLE,
+					      rwl_client_connection_data, outgoing_fwd);
+	local_client->connection =
+		wl_connection_create(fd_local, wl_client_connection_update, local_client);
+	if (local_client->connection == NULL) {
+		free(local_client);
+		return NULL;
+	}
+	//wl_list_insert(display->client_list.prev, &local_client->link);
+	//wl_list_init(&local_client->resource_list);
+	
+	
+	remote_client = malloc(sizeof *remote_client);
+	if (remote_client == NULL)
+		return NULL;
+		
+	memset(remote_client, 0, sizeof *remote_client);
+	remote_client->display = display;
+	
+	remote_client->display = display;
+	remote_client->source = wl_event_loop_add_fd(display->loop, fd_remote,
+					      WL_EVENT_READABLE,
+					      rwl_client_connection_data, incoming_fwd);			      					      
+	remote_client->connection =
+		wl_connection_create(fd_remote, wl_client_connection_update, remote_client);
+	if (remote_client->connection == NULL) {
+		free(remote_client);
+		return NULL;
+	}
+
+	//wl_list_insert(display->client_list.prev, &remote_client->link);
+	//wl_list_init(&remote_client->resource_list);
+	
+}
+
+
+static int
+rwl_socket_data(int fd, uint32_t mask, void *data)
 {
 	struct wl_display *display = data;
 	struct sockaddr_un name;
@@ -89,7 +278,7 @@ rwl_forward_init(int fd, uint32_t mask, void *data)
 	if (client_fd < 0)
 		fprintf(stderr, "failed to accept, errno: %d\n", errno);
 
-	//add both fds to epoll, create remote connection, add it to epoll
+	rwl_client_pair_create(display, client_fd, remote_fd);
 	//wl_closure_print();
 	return 1;
 }
@@ -194,7 +383,7 @@ rwl_display_add_socket(struct wl_display *display, const char *name)
 
 	if (wl_event_loop_add_fd(display->loop, s->fd,
 				 WL_EVENT_READABLE,
-				 rwl_forward_init, display) == NULL) {
+				 rwl_socket_data, display) == NULL) {
 		close(s->fd);
 		unlink(s->addr.sun_path);
 		free(s);
@@ -224,7 +413,21 @@ main(int argc, char *argv[])
 		fprintf(stderr, "failed to add socket: %m\n");
 		exit(EXIT_FAILURE);
 	}
+	
+	int fd = rwl_get_remote_connection(NULL);
 
+	int length = 13;
+
+	while(length > 0){
+		printf("num left = %d\n", length = send(fd, "Hello World\n", 13, 0));
+	}
+
+	/*wl_event_loop_add_fd(display->loop,
+		     fd, WL_EVENT_READABLE,
+		     ,
+		     connection_out);
+	*/
+	printf("Entering the main loop\n");
 	wl_display_run(display);
 
 }

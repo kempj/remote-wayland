@@ -1,0 +1,2 @@
+This requires the wayland libraries, and the environment variables set according to the build page on http://wayland.freedesktop.org/building.html
+

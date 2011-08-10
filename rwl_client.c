@@ -246,7 +246,7 @@ struct wl_server_display {
 	struct wl_list client_list;
 };
 
-/*struct wl_display {
+struct wl_display {
 	struct wl_proxy proxy;
 	struct wl_connection *connection;
 	int fd;
@@ -264,8 +264,7 @@ struct wl_server_display {
 
 	struct wl_list sync_list, frame_list;
 	uint32_t key;
-};*/
-
+};
 
 /*struct wl_event_loop {
 	int epoll_fd;
@@ -288,17 +287,16 @@ static int
 rwl_forward(int fd, uint32_t mask, void *data)
 {
 	struct rwl_connection *connection = data;
-
-	//read in from fd_from
-	//write to fd_to
+	//demarshal
+	//send closure
 	return 1;
 }
 
 int
-rwl_create_forward(int remote_fd, struct wl_server_display *main_display)
+rwl_create_forward(struct wl_server client_display,
+		   int remote_fd, 
+		   struct wl_server_display *main_display)
 {
-	struct wl_display *client_display = wl_display_connect(NULL);	
-	int local_fd = wl_display_get_fd(client_display,NULL,NULL);
 	struct rwl_connection *connection_in, *connection_out;
 
 	connection_in = malloc(sizeof connection_in);
@@ -325,15 +323,85 @@ rwl_create_forward(int remote_fd, struct wl_server_display *main_display)
 	return 1;
 }
 
+
+struct wl_display *
+rwl_local_display_connect(const char *name)
+{
+	struct wl_display *display;
+	const char *debug;
+	char *connection, *end;
+	int flags;
+
+	debug = getenv("WAYLAND_DEBUG");
+	if (debug)
+		wl_debug = 1;
+
+	display = malloc(sizeof *display);
+	if (display == NULL)
+		return NULL;
+
+	memset(display, 0, sizeof *display);
+	connection = getenv("WAYLAND_SOCKET");
+	if (connection) {
+		display->fd = strtol(connection, &end, 0);
+		if (*end != '\0') {
+			free(display);
+			return NULL;
+		}
+		flags = fcntl(display->fd, F_GETFD);
+		if (flags != -1)
+			fcntl(display->fd, F_SETFD, flags | FD_CLOEXEC);
+	} else if (connect_to_socket(display, name) < 0) {
+		free(display);
+		return NULL;
+	}
+
+	display->objects = wl_hash_table_create();
+	if (display->objects == NULL) {
+		close(display->fd);
+		free(display);
+		return NULL;
+	}
+	wl_list_init(&display->global_listener_list);
+	wl_list_init(&display->global_list);
+
+	display->proxy.object.interface = &wl_display_interface;
+	display->proxy.object.id = 1;
+	display->proxy.display = display;
+
+	wl_list_init(&display->sync_list);
+	wl_list_init(&display->frame_list);
+
+	display->proxy.object.implementation =
+		(void(**)(void)) &display_listener;
+	display->proxy.user_data = display;
+
+	display->connection = wl_connection_create(display->fd,
+						   connection_update,
+						   display);
+	if (display->connection == NULL) {
+		wl_hash_table_destroy(display->objects);
+		close(display->fd);
+		free(display);
+		return NULL;
+	}
+
+//	wl_display_bind(display, 1, "wl_display", 1);
+
+	return display;
+}
+
 static int 
 rwl_remote_connection(int fd, uint32_t mask, void *data)
 {
-	struct rwl_remote_display *display = data;
+	struct wl_server_display *display = data;
+	struct wl_display *client_display = rwl_local_display_connect(NULL);
 	struct sockaddr_storage incoming_addr;
 	socklen_t size;
 
-	int remote_fd = accept(display->fd,(struct sockaddr *) &incoming_addr, size);
-	rwl_create_forward(remote_fd, display->display);
+	int remote_fd = accept(fd,(struct sockaddr *) &incoming_addr, size);
+	//user client tools to get a fd to the local compositor 
+	rwl_create_forward(client_display, remote_fd, display);
 
 	//call rwl_forward
 
@@ -341,45 +409,44 @@ rwl_remote_connection(int fd, uint32_t mask, void *data)
 }
 
 int
-main(int argc, char **argv)
+get_listening_fd(char *port)
 {
-	struct wl_server_display *display;
-	struct rwl_remote_display *remote_display;
-	struct window *window;
 	int fd, err;
 	struct addrinfo *local_address_info;
-	printf("0\n");
-//	return 0;
-	
-	display = rwl_display_create();
 
-	if((err = getaddrinfo(NULL, "35000", NULL, &local_address_info)) != 0) {
+	if(port == NULL)
+		port = (char *)&"35000\0";
+	
+	if((err = getaddrinfo(NULL, port , NULL, &local_address_info)) != 0) {
 		fprintf(stderr, "pclient:getaddrinfo error: %s\n", gai_strerror(err));
 		return EXIT_FAILURE;
 	}
-		printf("1\n");
 	fd = socket(local_address_info->ai_family, 
 			local_address_info->ai_socktype,
 			local_address_info->ai_protocol);
 	bind(fd,local_address_info->ai_addr,local_address_info->ai_addrlen);
-		printf("2\n");
 	listen(fd,8);
-		printf("3\n");
 
-	remote_display = malloc(sizeof remote_display);
-	remote_display->display = display;
-	remote_display->fd = fd;
+}
 
+int
+main(int argc, char **argv)
+{
+	struct wl_server_display *display;
+	struct window *window;
+	int fd;
+	
+	display = rwl_display_create();
+
+	fd = get_listening_fd(NULL);
 
 	wl_event_loop_add_fd(display->loop,
 		     fd, WL_EVENT_READABLE,
 		     rwl_remote_connection,
-		     remote_display);
+		     display);
 
-	while (true){
-		printf("mainloop");
+	while (true)
 		rwl_display_run(display);
-
-	}
+	
 	return 0;
 }

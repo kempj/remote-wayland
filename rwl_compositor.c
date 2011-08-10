@@ -11,7 +11,7 @@
 #include <sys/file.h>
 #include <netdb.h>
 
-static char* remote_address;
+char* remote_address;
 
 struct wl_socket {
 	int fd;
@@ -138,7 +138,7 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
 		if (len < size)
 			break;
 
-		object = wl_hash_table_lookup(client_in->display->objects, p[0]);
+		/*object = wl_hash_table_lookup(client_in->display->objects, p[0]);
 		if (object == NULL) {
 			wl_client_post_error(client_in, &client_in->display->object,
 					     WL_DISPLAY_ERROR_INVALID_OBJECT,
@@ -157,9 +157,10 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
                         wl_connection_consume(connection_in, size);
                         len -= size;
                         continue;
-                }
+                }*/
 
-                message = &object->interface->methods[opcode];
+                message = &wl_display_interface.methods[opcode];
+			//&object->interface->methods[opcode];
                 closure = wl_connection_demarshal(client_in->connection, size,
                                                   client_in->display->objects,
                                                   message);
@@ -177,7 +178,6 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
                         continue;
                 }
 
-		//do I need to vmarshal?
 		wl_closure_send(closure, client_out->connection);		
 
 		wl_closure_print(closure, object, 1);
@@ -199,55 +199,57 @@ rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
 	
 	incoming_fwd = malloc(sizeof *incoming_fwd);
 	if (incoming_fwd == NULL)
-		return NULL;
-	
+		return -1;
 	outgoing_fwd = malloc(sizeof *outgoing_fwd);
 	if (outgoing_fwd == NULL)
-		return NULL;
+		return -1;
+
 	
 	outgoing_fwd->client_in = local_client;
 	outgoing_fwd->client_out = remote_client;
-		
+
 	incoming_fwd->client_in = remote_client;
 	incoming_fwd->client_out = local_client;
 		
 	
 	local_client = malloc(sizeof *local_client);
 	if (local_client == NULL)
-		return NULL;
-	
+		return -1;
 	memset(local_client, 0, sizeof *local_client);
 	local_client->display = display;
+
+	remote_client = malloc(sizeof *remote_client);
+	if (remote_client == NULL)
+		return -1;
+	memset(remote_client, 0, sizeof *remote_client);
+	remote_client->display = display;
+
 	
 	local_client->source = wl_event_loop_add_fd(display->loop, fd_local,
 					      WL_EVENT_READABLE,
 					      rwl_client_connection_data, outgoing_fwd);
+
+	remote_client->source = wl_event_loop_add_fd(display->loop, fd_remote,
+					      WL_EVENT_READABLE,
+					      rwl_client_connection_data, incoming_fwd);
+	
+	if(remote_client->source == NULL)
+		printf("This shoudln't be null\n");
+
 	local_client->connection =
 		wl_connection_create(fd_local, wl_client_connection_update, local_client);
 	if (local_client->connection == NULL) {
 		free(local_client);
-		return NULL;
+		return -1;
 	}
 	//wl_list_insert(display->client_list.prev, &local_client->link);
 	//wl_list_init(&local_client->resource_list);
 	
-	
-	remote_client = malloc(sizeof *remote_client);
-	if (remote_client == NULL)
-		return NULL;
-		
-	memset(remote_client, 0, sizeof *remote_client);
-	remote_client->display = display;
-	
-	remote_client->display = display;
-	remote_client->source = wl_event_loop_add_fd(display->loop, fd_remote,
-					      WL_EVENT_READABLE,
-					      rwl_client_connection_data, incoming_fwd);			      					      
 	remote_client->connection =
 		wl_connection_create(fd_remote, wl_client_connection_update, remote_client);
 	if (remote_client->connection == NULL) {
 		free(remote_client);
-		return NULL;
+		return -1;
 	}
 
 	//wl_list_insert(display->client_list.prev, &remote_client->link);
@@ -264,8 +266,6 @@ rwl_socket_data(int fd, uint32_t mask, void *data)
 	socklen_t length;
 	int client_fd, remote_fd;
 
-	remote_fd = rwl_get_remote_connection(remote_address);
-
 	length = sizeof name;
 	client_fd =
 		accept4(fd, (struct sockaddr *) &name, &length, SOCK_CLOEXEC);
@@ -277,6 +277,8 @@ rwl_socket_data(int fd, uint32_t mask, void *data)
 
 	if (client_fd < 0)
 		fprintf(stderr, "failed to accept, errno: %d\n", errno);
+
+	remote_fd = rwl_get_remote_connection(remote_address);
 
 	rwl_client_pair_create(display, client_fd, remote_fd);
 	//wl_closure_print();
@@ -394,7 +396,6 @@ rwl_display_add_socket(struct wl_display *display, const char *name)
 	return 0;
 }
 
-
 int
 main(int argc, char *argv[])
 {
@@ -404,9 +405,7 @@ main(int argc, char *argv[])
 	if(argc > 1){
 		remote_address = argv[2];
 	} else{
-		remote_address = (char *) malloc(13 * sizeof (char));
-		remote_address = &"127.0.0.1\0";
-		//printf("assigned %s\n", remote_address);
+		remote_address = (char *)&"127.0.0.1\0";
 	}
 	
 	if (rwl_display_add_socket(display, NULL)) {
@@ -414,20 +413,6 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 	
-	int fd = rwl_get_remote_connection(NULL);
-
-	int length = 13;
-
-	while(length > 0){
-		printf("num left = %d\n", length = send(fd, "Hello World\n", 13, 0));
-	}
-
-	/*wl_event_loop_add_fd(display->loop,
-		     fd, WL_EVENT_READABLE,
-		     ,
-		     connection_out);
-	*/
-	printf("Entering the main loop\n");
 	wl_display_run(display);
 
 }

@@ -88,8 +88,10 @@ rwl_get_remote_connection(char *remote_name)
 			continue;
 		}
 
-		if (connect(remote_fd, result->ai_addr, result->ai_addrlen) == -1) {
+		if ((err = connect(remote_fd, result->ai_addr,
+				   result->ai_addrlen) == -1)) {
 			close(remote_fd);
+			fprintf(stderr,"remote connect error: %s\n",gai_strerror(err));
 			if(result->ai_next = NULL)
 				perror("client: connect");
 			continue;
@@ -103,6 +105,7 @@ rwl_get_remote_connection(char *remote_name)
 static int
 rwl_client_connection_data(int fd, uint32_t mask, void *data)
 {
+	printf("secondary contact\n");
 	struct rwl_client_pair *client_pair = data;
 	struct wl_client *client_in, *client_out;
 	client_in = client_pair->client_in;
@@ -158,7 +161,7 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
                         len -= size;
                         continue;
                 }*/
-
+		printf("opcode = %d, method count = %d\n",opcode, wl_display_interface.method_count);
                 message = &wl_display_interface.methods[opcode];
 			//&object->interface->methods[opcode];
                 closure = wl_connection_demarshal(client_in->connection, size,
@@ -167,14 +170,14 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
                 len -= size;
 
                 if (closure == NULL && errno == EINVAL) {
-                        wl_client_post_error(client_in, &client_in->display->object,
-                                             WL_DISPLAY_ERROR_INVALID_METHOD,
-                                             "invalid arguments for %s@%d.%s",
-                                             object->interface->name,
-                                             object->id, message->name);
+//                        wl_client_post_error(client_in, &client_in->display->object,
+//                                             WL_DISPLAY_ERROR_INVALID_METHOD,
+//                                             "invalid arguments for %s@%d.%s",
+//                                             object->interface->name,
+ //                                            object->id, message->name);
                         continue;
                 } else if (closure == NULL && errno == ENOMEM) {
-                        wl_client_post_no_memory(client_in);
+ //                       wl_client_post_no_memory(client_in);
                         continue;
                 }
 
@@ -188,9 +191,18 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
 	return 1;
 }
 
+
 static int
-rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
+do_nothing(struct wl_connection *connection,
+			    uint32_t mask, void *data)
 {
+	return 1;
+}
+
+static int
+rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote, uint32_t mask)
+{
+	printf("Creating client pair\n");
 	struct wl_client *local_client;
 	struct wl_client *remote_client;
 	
@@ -204,14 +216,6 @@ rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
 	if (outgoing_fwd == NULL)
 		return -1;
 
-	
-	outgoing_fwd->client_in = local_client;
-	outgoing_fwd->client_out = remote_client;
-
-	incoming_fwd->client_in = remote_client;
-	incoming_fwd->client_out = local_client;
-		
-	
 	local_client = malloc(sizeof *local_client);
 	if (local_client == NULL)
 		return -1;
@@ -224,7 +228,14 @@ rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
 	memset(remote_client, 0, sizeof *remote_client);
 	remote_client->display = display;
 
+	outgoing_fwd->client_in = local_client;
+	outgoing_fwd->client_out = remote_client;
+
+	incoming_fwd->client_in = remote_client;
+	incoming_fwd->client_out = local_client;
+		
 	
+
 	local_client->source = wl_event_loop_add_fd(display->loop, fd_local,
 					      WL_EVENT_READABLE,
 					      rwl_client_connection_data, outgoing_fwd);
@@ -232,35 +243,36 @@ rwl_client_pair_create(struct wl_display *display, int fd_local, int fd_remote)
 	remote_client->source = wl_event_loop_add_fd(display->loop, fd_remote,
 					      WL_EVENT_READABLE,
 					      rwl_client_connection_data, incoming_fwd);
-	
-	if(remote_client->source == NULL)
-		printf("This shoudln't be null\n");
 
 	local_client->connection =
 		wl_connection_create(fd_local, wl_client_connection_update, local_client);
 	if (local_client->connection == NULL) {
+		fprintf(stderr,"Failed to connect to local client\n");
 		free(local_client);
 		return -1;
 	}
 	//wl_list_insert(display->client_list.prev, &local_client->link);
 	//wl_list_init(&local_client->resource_list);
 	
+
 	remote_client->connection =
 		wl_connection_create(fd_remote, wl_client_connection_update, remote_client);
 	if (remote_client->connection == NULL) {
+		fprintf(stderr,"Failed to connect to remote client\n");
 		free(remote_client);
 		return -1;
 	}
 
+
 	//wl_list_insert(display->client_list.prev, &remote_client->link);
 	//wl_list_init(&remote_client->resource_list);
-	
+	return 1;
 }
 
 
 static int
 rwl_socket_data(int fd, uint32_t mask, void *data)
-{
+{	printf("initial connection\n");
 	struct wl_display *display = data;
 	struct sockaddr_un name;
 	socklen_t length;
@@ -280,8 +292,11 @@ rwl_socket_data(int fd, uint32_t mask, void *data)
 
 	remote_fd = rwl_get_remote_connection(remote_address);
 
-	rwl_client_pair_create(display, client_fd, remote_fd);
-	//wl_closure_print();
+	printf("client_fd = %d, remote_fd = %d\n",client_fd,remote_fd);
+	if(rwl_client_pair_create(display, client_fd, remote_fd, mask) == -1){
+		fprintf(stderr,"Creating client pair failed\n");
+		return -1;
+	}
 	return 1;
 }
 

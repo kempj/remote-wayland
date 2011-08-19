@@ -562,4 +562,3 @@ struct wl_display * rwl_display_create(void)
 	return wl_display_create();
 }
 
-

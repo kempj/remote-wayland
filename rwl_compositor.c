@@ -170,32 +170,18 @@ rwl_client_connection_data(int fd, uint32_t mask, void *data)
                 len -= size;
 
                 if (closure == NULL && errno == EINVAL) {
-//                        wl_client_post_error(client_in, &client_in->display->object,
-//                                             WL_DISPLAY_ERROR_INVALID_METHOD,
-//                                             "invalid arguments for %s@%d.%s",
-//                                             object->interface->name,
- //                                            object->id, message->name);
                         continue;
                 } else if (closure == NULL && errno == ENOMEM) {
- //                       wl_client_post_no_memory(client_in);
                         continue;
                 }
 
-		wl_closure_send(closure, client_out->connection);		
+//		wl_closure_send(closure, client_out->connection);		
 
 		wl_closure_print(closure, object, 1);
 
 		wl_closure_destroy(closure);
 	} 
 
-	return 1;
-}
-
-
-static int
-do_nothing(struct wl_connection *connection,
-			    uint32_t mask, void *data)
-{
 	return 1;
 }
 

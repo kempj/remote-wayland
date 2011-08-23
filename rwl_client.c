@@ -233,6 +233,12 @@ rwl_remote_init(int fd)
 	//
 }*/
 
+struct wl_event_loop {
+        int epoll_fd;
+        struct wl_list check_list;
+        struct wl_list idle_list;
+};
+
 
 struct wl_server_display {
 	struct wl_object object;
@@ -397,7 +403,7 @@ rwl_create_forward(struct wl_display *client_display,
 		   int remote_fd, 
 		   struct wl_server_display *main_display)
 {
-	printf("creating forwards\n");
+	printf("creating forwards, main loop fd = %d\n", main_display->loop->epoll_fd);
 	//Might not need all of one of the displays
 	//only need the loop in this function, later
 	//each of the connections will need a hash table
@@ -407,11 +413,23 @@ rwl_create_forward(struct wl_display *client_display,
 	struct rwl_bundle *outgoing_fwd;
 	struct wl_connection *remote_connection;
 
-	source = malloc(sizeof *source);
+//	source = malloc(sizeof *source);
+//	if(source == NULL)
+//		return -1;
+
 	incoming_fwd = malloc(sizeof *incoming_fwd);
+	if(incoming_fwd == NULL)
+	{
+		fprintf(stderr," failed to make the incoming fwd\n");
+		return -1;
+	}
+
 	outgoing_fwd = malloc(sizeof *outgoing_fwd);
-
-
+	if(outgoing_fwd == NULL)
+	{
+		fprintf(stderr," failed to make the outgoing fws\n");
+		return -1;
+	}
 	incoming_fwd->server_display = main_display;
 	incoming_fwd->client_display = client_display;
 	incoming_fwd->connection_in = remote_connection;
@@ -428,6 +446,11 @@ rwl_create_forward(struct wl_display *client_display,
 		     rwl_forward_data,
 		     incoming_fwd);
 
+	if(source == NULL)
+	{
+		fprintf(stderr,"failed to add fd to main loop\n");
+		return -1;
+	}
 	wl_event_loop_add_fd(main_display->loop,
 		     client_display->fd,
 		     WL_EVENT_READABLE,
@@ -483,6 +506,7 @@ connect_to_socket(struct wl_display *display, const char *name)
         return 0;
 }
 
+/*
 struct wl_display *
 rwl_local_display_connect(const char *name, struct wl_server_display *server_display)
 {
@@ -513,6 +537,16 @@ rwl_local_display_connect(const char *name, struct wl_server_display *server_dis
 		return NULL;
 	}
 
+	display->proxy.object.interface = &wl_display_interface;
+        display->proxy.object.id = 1;
+        display->proxy.display = display;
+
+
+	display->proxy.object.implementation =
+                (void(**)(void)) &display_listener;
+        display->proxy.user_data = display;
+
+
 	struct wl_event_source *source = malloc(sizeof *source);
 	source->loop = server_display->loop;
 
@@ -526,30 +560,40 @@ rwl_local_display_connect(const char *name, struct wl_server_display *server_dis
 		return NULL;
 	}
 
+	wl_display_bind(display, 1, "wl_display", 1);
+
 	return display;
-}
+}*/
 
 static int 
 rwl_remote_connection(int fd, uint32_t mask, void *data)
 {
-	printf("Initial connection\n");
+	printf("Initial connection, fd = %d\n",fd);
 	struct wl_server_display *display = data;
 	struct wl_display *client_display;
 	struct sockaddr_storage incoming_addr;
 	socklen_t size;
+	int remote_fd;
 
-	client_display = rwl_local_display_connect(NULL, display);
+	printf("1main loop epoll = %d\n", display->loop->epoll_fd);
 
-	int remote_fd = accept(fd,(struct sockaddr *) &incoming_addr, size);
 
-	if(remote_fd == -1){
+	if((remote_fd = accept(fd,(struct sockaddr *) &incoming_addr, size)) == -1){
 		fprintf(stderr, "remote connection failed\n");
 		return -1;
 	}
-	rwl_create_forward(client_display, remote_fd, display);
-
-	//call rwl_forward
 	
+	printf("2main loop epoll = %d\n", display->loop->epoll_fd);
+	client_display = wl_display_connect(NULL);
+	printf("3main loop epoll = %d, initial fd = %d, new fd = %d\n", display->loop->epoll_fd, fd, remote_fd);
+
+	if(rwl_create_forward(client_display, remote_fd, display) == -1){
+		fprintf(stderr,"failed to create forwards\n");
+		printf("4main loop epoll = %d\n", display->loop->epoll_fd);
+
+		return -1;
+	}
+
 	return 1;
 }
 
@@ -585,7 +629,7 @@ get_listening_fd(char *port)
 		fprintf(stderr, "pclient:listen failed\n");
 		return EXIT_FAILURE;
 	}
-	printf("fd = %d, exifail = %d\n",fd,EXIT_FAILURE);
+	printf("fd = %d\n",fd);
 
 	return fd;
 }
@@ -600,7 +644,7 @@ main(int argc, char **argv)
 	display = rwl_display_create();
 
 	fd = get_listening_fd(NULL);
-	printf("fd = %d\n",fd);
+	printf("fd = %d, main loop fd = %d\n",fd, display->loop->epoll_fd);
 
 	wl_event_loop_add_fd(display->loop,
 		     fd, WL_EVENT_READABLE,
